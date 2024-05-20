@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 
 from .prompt import EPrompt
+from .preT_attention import MultiHeadAttention
 
 
 class Transformer(nn.Module):
@@ -28,7 +29,9 @@ class Transformer(nn.Module):
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
         encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
-        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+        # self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+        self.encoder = TransformerEncoderWithPrompt(encoder_layer, num_encoder_layers, encoder_norm,
+                                                    d_model, nhead)
 
         decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
@@ -87,11 +90,8 @@ class TransformerEncoder(nn.Module):
 class TransformerEncoderWithPrompt(nn.Module):
 
     def __init__(
-            self, encoder_layer, num_layers, norm=None,
-            g_prompt_length=None, embed_dim = 2048, g_prompt_layer_idx=None,
-            e_prompt_length=None, embedding_key='cls', prompt_pool=True, prompt_key=False, pool_size=None, top_k=1, 
-            batchwise_prompt=False, e_prompt_layer_idx=None, use_prefix_tune_for_e_prompt=False, num_heads=8, same_key_value=False
-            
+            self, encoder_layer, num_layers, norm=None, d_model = 512, nhead = 8,
+            g_prompt_length=5, g_prompt_layer_idx=[0,1]            
         ):
         super().__init__()
         self.layers = _get_clones(encoder_layer, num_layers)
@@ -101,15 +101,17 @@ class TransformerEncoderWithPrompt(nn.Module):
         # Set up G-Prompt with uniform
         self.g_prompt_layer_idx = g_prompt_layer_idx
         num_g_prompt = len(self.g_prompt_layer_idx) if self.g_prompt_layer_idx is not None else 0
-        g_prompt_shape=(num_g_prompt, g_prompt_length, embed_dim)
+        
+        
+        g_prompt_shape = [num_g_prompt, 2, g_prompt_length, nhead, d_model//nhead]
         self.g_prompt = nn.Parameter(torch.randn(g_prompt_shape))
         nn.init.uniform_(self.g_prompt, -1, 1)
         
-        # Set up E-Prompt with uniform
+        """# Set up E-Prompt with uniform
         self.e_prompt_layer_idx = e_prompt_layer_idx
         num_e_prompt = len(self.e_prompt_layer_idx) if self.e_prompt_layer_idx is not None else 0
         
-        self.e_prompt = EPrompt(length=e_prompt_length, embed_dim=embed_dim, embedding_key=embedding_key, prompt_init='uniform',
+        self.e_prompt = EPrompt(length=e_prompt_length, d_model=d_model, embedding_key=embedding_key, prompt_init='uniform',
                     prompt_pool=prompt_pool, prompt_key=prompt_key, pool_size=pool_size, top_k=top_k, batchwise_prompt=batchwise_prompt,
                     prompt_key_init='uniform', num_layers=num_e_prompt, use_prefix_tune_for_e_prompt=use_prefix_tune_for_e_prompt,
                     num_heads=num_heads, same_key_value=same_key_value)
@@ -119,18 +121,29 @@ class TransformerEncoderWithPrompt(nn.Module):
             if not self.use_prefix_tune_for_g_prompt:
                 self.total_prompt_len += g_prompt_length * len(self.g_prompt_layer_idx)
             if not self.use_prefix_tune_for_e_prompt:
-                self.total_prompt_len += e_prompt_length * top_k * len(self.e_prompt_layer_idx)
+                self.total_prompt_len += e_prompt_length * top_k * len(self.e_prompt_layer_idx)"""
 
     def forward(self, src,
                 mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None,
                 pos: Optional[Tensor] = None):
         output = src
-
-        for layer in self.layers:
+        
+        g_prompt_counter = -1
+        
+        for idx, layer in enumerate(self.layers):
+            if idx in self.g_prompt_layer_idx:
+                g_prompt_counter += 1
+                i = torch.tensor([g_prompt_counter] * src.shape[0]).to(src.device)
+                g_prompt = self.g_prompt[i]
+            else:
+                g_prompt = None
             output = layer(output, src_mask=mask,
-                           src_key_padding_mask=src_key_padding_mask, pos=pos)
-
+                        src_key_padding_mask=src_key_padding_mask, pos=pos, prompt=g_prompt)
+            
+        ################################################################
+        #                           NOTE                               #
+        ################################################################
         if self.norm is not None:
             output = self.norm(output)
 
@@ -182,7 +195,7 @@ class TransformerEncoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False):
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.self_attn = MultiHeadAttention(d_model, nhead, dropout=dropout)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -198,30 +211,39 @@ class TransformerEncoderLayer(nn.Module):
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
-
+    ################################################################
+    #                           NOTE                               #
+    ################################################################
     def forward_post(self,
                      src,
                      src_mask: Optional[Tensor] = None,
                      src_key_padding_mask: Optional[Tensor] = None,
-                     pos: Optional[Tensor] = None):
+                     pos: Optional[Tensor] = None,
+                     prompt: Optional[Tensor] = None):
         q = k = self.with_pos_embed(src, pos)
         src2 = self.self_attn(q, k, value=src, attn_mask=src_mask,
-                              key_padding_mask=src_key_padding_mask)[0]
+                              key_padding_mask=src_key_padding_mask, 
+                              prompt=prompt)[0]
         src = src + self.dropout1(src2)
         src = self.norm1(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
         src = src + self.dropout2(src2)
         src = self.norm2(src)
         return src
-
+    ################################################################
+    #                           NOTE                               #
+    ################################################################
     def forward_pre(self, src,
                     src_mask: Optional[Tensor] = None,
                     src_key_padding_mask: Optional[Tensor] = None,
-                    pos: Optional[Tensor] = None):
+                    pos: Optional[Tensor] = None,
+                    prompt: Optional[Tensor] = None):
         src2 = self.norm1(src)
         q = k = self.with_pos_embed(src2, pos)
         src2 = self.self_attn(q, k, value=src2, attn_mask=src_mask,
-                              key_padding_mask=src_key_padding_mask)[0]
+                              key_padding_mask=src_key_padding_mask,
+                              prompt=prompt)[0]
+                              
         src = src + self.dropout1(src2)
         src2 = self.norm2(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src2))))
@@ -231,10 +253,11 @@ class TransformerEncoderLayer(nn.Module):
     def forward(self, src,
                 src_mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None,
-                pos: Optional[Tensor] = None):
+                pos: Optional[Tensor] = None,
+                prompt: Optional[Tensor] = None):
         if self.normalize_before:
-            return self.forward_pre(src, src_mask, src_key_padding_mask, pos)
-        return self.forward_post(src, src_mask, src_key_padding_mask, pos)
+            return self.forward_pre(src, src_mask, src_key_padding_mask, pos, prompt)
+        return self.forward_post(src, src_mask, src_key_padding_mask, pos, prompt)
 
 
 class TransformerDecoderLayer(nn.Module):

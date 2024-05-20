@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class EPrompt(nn.Module):
-    def __init__(self, length=5, embed_dim=768, embedding_key='mean', prompt_init='uniform', prompt_pool=False, 
+    def __init__(self, length=5, d_model=768, embedding_key='mean', prompt_init='uniform', prompt_pool=False, 
                  prompt_key=False, pool_size=None, top_k=None, batchwise_prompt=False, prompt_key_init='uniform',
                  num_layers=1, use_prefix_tune_for_e_prompt=False, num_heads=-1, same_key_value=False,):
         super().__init__()
@@ -23,10 +23,10 @@ class EPrompt(nn.Module):
         if self.prompt_pool:
             # user prefix style
             if self.use_prefix_tune_for_e_prompt:
-                assert embed_dim % self.num_heads == 0
+                assert d_model % self.num_heads == 0
                 if self.same_key_value:
                     prompt_pool_shape = (self.num_layers, 1, self.pool_size, self.length, 
-                                        self.num_heads, embed_dim // self.num_heads)
+                                        self.num_heads, d_model // self.num_heads)
 
                     if prompt_init == 'zero':
                         self.prompt = nn.Parameter(torch.zeros(prompt_pool_shape))
@@ -36,14 +36,14 @@ class EPrompt(nn.Module):
                     self.prompt = self.prompt.repeat(1, 2, 1, 1, 1, 1)
                 else:
                     prompt_pool_shape = (self.num_layers, 2, self.pool_size, self.length, 
-                                        self.num_heads, embed_dim // self.num_heads)
+                                        self.num_heads, d_model // self.num_heads)
                     if prompt_init == 'zero':
                         self.prompt = nn.Parameter(torch.zeros(prompt_pool_shape))
                     elif prompt_init == 'uniform':                        
-                        self.prompt = nn.Parameter(torch.randn(prompt_pool_shape)) # num_layers, 2, pool_size, length, num_heads, embed_dim // num_heads
+                        self.prompt = nn.Parameter(torch.randn(prompt_pool_shape)) # num_layers, 2, pool_size, length, num_heads, d_model // num_heads
                         nn.init.uniform_(self.prompt, -1, 1)
             else:
-                prompt_pool_shape=(self.num_layers, self.pool_size, self.length, embed_dim)
+                prompt_pool_shape=(self.num_layers, self.pool_size, self.length, d_model)
                 if prompt_init == 'zero':
                     self.prompt = nn.Parameter(torch.zeros(prompt_pool_shape))
                 elif prompt_init == 'uniform':
@@ -52,7 +52,7 @@ class EPrompt(nn.Module):
                     
         # if using learnable prompt keys
         if prompt_key:
-            key_shape = (pool_size, embed_dim)
+            key_shape = (pool_size, d_model)
             if prompt_key_init == 'zero':
                 self.prompt_key = nn.Parameter(torch.zeros(key_shape))
             elif prompt_key_init == 'uniform':
@@ -116,15 +116,15 @@ class EPrompt(nn.Module):
             out['prompt_idx'] = idx
             if self.use_prefix_tune_for_e_prompt:
                 batched_prompt_raw = self.prompt[:,:,idx]  # num_layers, B, top_k, length, C
-                num_layers, dual, batch_size, top_k, length, num_heads, heads_embed_dim = batched_prompt_raw.shape
+                num_layers, dual, batch_size, top_k, length, num_heads, heads_d_model = batched_prompt_raw.shape
                 batched_prompt = batched_prompt_raw.reshape(
-                    num_layers, batch_size, dual, top_k * length, num_heads, heads_embed_dim
+                    num_layers, batch_size, dual, top_k * length, num_heads, heads_d_model
                 )
             else:
                 batched_prompt_raw = self.prompt[:,idx]
-                num_layers, batch_size, top_k, length, embed_dim = batched_prompt_raw.shape
+                num_layers, batch_size, top_k, length, d_model = batched_prompt_raw.shape
                 batched_prompt = batched_prompt_raw.reshape(
-                    num_layers, batch_size, top_k * length, embed_dim
+                    num_layers, batch_size, top_k * length, d_model
                 )
 
             batched_key_norm = prompt_key_norm[idx] # B, top_k, C
@@ -142,10 +142,10 @@ class EPrompt(nn.Module):
         else:
             # user prefix style
             if self.use_prefix_tune_for_e_prompt:
-                assert embed_dim % self.num_heads == 0
+                assert d_model % self.num_heads == 0
                 if self.same_key_value:
                     prompt_pool_shape = (self.num_layers, 1, self.length, 
-                                        self.num_heads, embed_dim // self.num_heads)
+                                        self.num_heads, d_model // self.num_heads)
                     if self.prompt_init == 'zero':
                         self.prompt = nn.Parameter(torch.zeros(prompt_pool_shape))
                     elif self.prompt_init == 'uniform':
@@ -154,15 +154,15 @@ class EPrompt(nn.Module):
                     self.prompt = self.prompt.repeat(1, 2, 1, 1, 1)
                 else:
                     prompt_pool_shape = (self.num_layers, 2, self.length, 
-                                        self.num_heads, embed_dim // self.num_heads)
+                                        self.num_heads, d_model // self.num_heads)
                     if self.prompt_init == 'zero':
                         self.prompt = nn.Parameter(torch.zeros(prompt_pool_shape))
                     elif self.prompt_init == 'uniform':
-                        self.prompt = nn.Parameter(torch.randn(prompt_pool_shape)) # num_layers, 2, length, num_heads, embed_dim // num_heads
+                        self.prompt = nn.Parameter(torch.randn(prompt_pool_shape)) # num_layers, 2, length, num_heads, d_model // num_heads
                         nn.init.uniform_(self.prompt, -1, 1)
                 batched_prompt = self.prompt.unsqueeze(0).expand(-1, x_embed.shape[0], -1, -1, -1)
             else:
-                prompt_pool_shape = (self.num_layers, self.length, embed_dim)
+                prompt_pool_shape = (self.num_layers, self.length, d_model)
                 if self.prompt_init == 'zero':
                     self.prompt = nn.Parameter(torch.zeros(prompt_pool_shape))
                 elif self.prompt_init == 'uniform':
