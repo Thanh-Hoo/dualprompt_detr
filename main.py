@@ -56,6 +56,12 @@ def get_args_parser():
                         help="Number of query slots")
     parser.add_argument('--pre_norm', action='store_true')
 
+    # * Prompts
+    parser.add_argument('--g_prompt_length', default=5, type=int,
+                        help="length of G-Prompt")
+    parser.add_argument('--g_prompt_layer_idx', default=[0,1], type=list,
+                        help="the layer index of the G-Prompt")
+    
     # * Segmentation
     parser.add_argument('--masks', action='store_true',
                         help="Train segmentation head if the flag is provided")

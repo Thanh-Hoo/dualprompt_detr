@@ -23,7 +23,7 @@ class Transformer(nn.Module):
     def __init__(self, d_model=512, nhead=8, num_encoder_layers=6,
                  num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False,
-                 return_intermediate_dec=False):
+                 return_intermediate_dec=False, g_prompt_length=5, g_prompt_layer_idx=[0,1]):
         super().__init__()
 
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
@@ -31,7 +31,9 @@ class Transformer(nn.Module):
         encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
         # self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
         self.encoder = TransformerEncoderWithPrompt(encoder_layer, num_encoder_layers, encoder_norm,
-                                                    d_model, nhead)
+                                                    d_model, nhead, g_prompt_length, g_prompt_layer_idx)
+        
+            
 
         decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
                                                 dropout, activation, normalize_before)
@@ -359,6 +361,8 @@ def build_transformer(args):
         num_decoder_layers=args.dec_layers,
         normalize_before=args.pre_norm,
         return_intermediate_dec=True,
+        g_prompt_length=args.g_prompt_length, 
+        g_prompt_layer_idx=args.g_prompt_layer_idx
     )
 
 

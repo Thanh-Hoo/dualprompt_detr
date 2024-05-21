@@ -25,7 +25,7 @@ src =  torch.randn([1,100,512])
 pos = None
 
 #G-prompt
-g_prompt_shape = [1, 2, 2, nhead, d_model//nhead]
+g_prompt_shape = [1, 2, 5, nhead, d_model//nhead]
 g_prompt = nn.Parameter(torch.randn(g_prompt_shape))
 nn.init.uniform_(g_prompt, -1, 1)
 
